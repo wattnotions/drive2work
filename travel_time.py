@@ -1,10 +1,12 @@
 import os
 import requests
+import csv
+from datetime import datetime, timedelta
 
 # Read API key from api_key.txt
 def get_api_key():
     try:
-        with open("api_key.txt", "r") as file:
+        with open("/home/bitnami/drive2work/api_key.txt", "r") as file:
             return file.readline().strip()
     except FileNotFoundError:
         print("❌ Error: api_key.txt file not found! Create it and add your API key inside.")
@@ -23,7 +25,7 @@ def get_lat_lng(address):
         return location["lat"], location["lng"]
     else:
         print(f"❌ API Error: {response.status_code}, {response.text}")
-        exit(1)
+        return None, None
 
 def get_travel_time():
     """
@@ -38,6 +40,9 @@ def get_travel_time():
     origin_lat, origin_lng = get_lat_lng(origin)
     destination_lat, destination_lng = get_lat_lng(destination)
 
+    if origin_lat is None or destination_lat is None:
+        return None  # Skip logging if geocoding fails
+
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
     headers = {
@@ -46,10 +51,14 @@ def get_travel_time():
         "X-Goog-FieldMask": "routes.duration"
     }
 
+    departure_time = (datetime.utcnow() + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     data = {
         "origin": {"location": {"latLng": {"latitude": origin_lat, "longitude": origin_lng}}},
         "destination": {"location": {"latLng": {"latitude": destination_lat, "longitude": destination_lng}}},
-        "travelMode": travel_mode
+        "travelMode": travel_mode,
+        "routingPreference": "TRAFFIC_AWARE",
+        "departureTime": departure_time  # Ensure the timestamp is in the future
     }
 
     response = requests.post(url, headers=headers, json=data)
@@ -57,18 +66,33 @@ def get_travel_time():
     if response.status_code == 200:
         result = response.json()
         if "routes" in result and result["routes"]:
-            # Extract duration and convert from string to integer
             travel_time_str = result["routes"][0]["duration"]  # Example: "1601s"
             travel_time_seconds = int(travel_time_str[:-1])  # Remove last character ('s') and convert to int
             travel_time_minutes = round(travel_time_seconds / 60)  # Convert to minutes
-
-            return f"🚗 Estimated travel time from {origin} to {destination} (DRIVING): {travel_time_minutes} minutes"
-
+            return travel_time_minutes
         else:
-            return "⚠️ No route found."
+            return None
     else:
-        return f"❌ API Error: {response.status_code}, {response.text}"
+        print(f"❌ API Error: {response.status_code}, {response.text}")
+        return None
+
+def log_travel_time():
+    """ Logs the current timestamp and travel time to travel_log.csv """
+    travel_time = get_travel_time()
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Readable and parseable timestamp
+
+    log_file = "/home/bitnami/drive2work/travel_log.csv"
+    file_exists = os.path.isfile(log_file)
+
+    with open(log_file, mode="a", newline="") as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["Timestamp", "Travel Time (minutes)"])  # Write header if file is new
+        writer.writerow([timestamp, travel_time if travel_time is not None else "ERROR"])
+
+    print(f"✅ Logged: {timestamp}, {travel_time if travel_time is not None else 'ERROR'}")
 
 if __name__ == "__main__":
     print(f"✅ API Key Loaded Successfully: {API_KEY[:5]}*****")  # Show partial key
-    print(get_travel_time())
+    log_travel_time()
